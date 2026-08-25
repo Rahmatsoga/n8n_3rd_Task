@@ -184,10 +184,10 @@ These thresholds are configurable in the "Parse AI Score & Classify" code node a
 ![Supabase table](./screenshots/supabase-table.png)
 
 **Sample acknowledgment email received:**
-![Acknowledgment email](./screenshots/acknowledgment-email.png)
+![Acknowledgment email](./screenshots/acknowledgment-email.jpg)
 
 **AI scoring output (Gemini response):**
-![AI scoring output](./screenshots/ai-scoring-output.png)
+![AI scoring output](./screenshots/ai-scoring-output.jpg)
 
 ---
 
