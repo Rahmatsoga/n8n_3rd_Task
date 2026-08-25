@@ -1,0 +1,288 @@
+{
+  "name": "DevSynt Hiring - 2. Review & Routing",
+  "nodes": [
+    {
+      "id": "sticky_overview2",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-200, -60],
+      "parameters": {
+        "width": 620,
+        "height": 240,
+        "content": "## Workflow 2 — Review & Routing\n\n**Flow:**\n1. On a schedule, read pending scored candidates from Supabase (status = pending_review, classification already set by Workflow 1)\n2. Branch on classification:\n   - Strong -> HTML shortlist/confirmation email -> status = notified\n   - Average -> notify hiring manager -> status = manual_review\n   - Weak -> rejection email -> status = notified\n3. Update the record's status after each action so it's never processed twice\n\n**Before running:**\n- Attach Supabase and SMTP/Email credentials on the placeholder nodes.\n- Set the hiring manager's email address in the 'Notify Hiring Manager' node.\n- Adjust the schedule interval to your preference."
+      }
+    },
+    {
+      "id": "schedule_trigger",
+      "name": "Every 15 Minutes",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-200, 300],
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "minutes", "minutesInterval": 15 }
+          ]
+        }
+      }
+    },
+    {
+      "id": "get_pending",
+      "name": "Get Pending Candidates (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [40, 300],
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "candidates",
+        "returnAll": true,
+        "filterType": "manual",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "status",
+              "condition": "eq",
+              "keyValue": "pending_review"
+            }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase account"
+        }
+      },
+      "notes": "Only pulls candidates not yet acted on. Workflow 1 leaves status='pending_review' after scoring."
+    },
+    {
+      "id": "has_classification",
+      "name": "Has Classification?",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [260, 300],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.classification}}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "notes": "Error handling: skip records where AI scoring hasn't completed yet (classification still null) - they'll be picked up next run"
+    },
+    {
+      "id": "switch_classification",
+      "name": "Route by Classification",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [480, 300],
+      "parameters": {
+        "mode": "expression",
+        "output": "={{$json.classification}}",
+        "options": {
+          "fallbackOutput": "extra"
+        },
+        "rules": {
+          "values": [
+            { "outputKey": "Strong" },
+            { "outputKey": "Average" },
+            { "outputKey": "Weak" }
+          ]
+        }
+      }
+    },
+    {
+      "id": "send_strong_email",
+      "name": "Send Shortlist Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [740, 100],
+      "parameters": {
+        "fromEmail": "careers@devsynt.com",
+        "toEmail": "={{$json.email}}",
+        "subject": "Great news about your DevSynt application!",
+        "emailFormat": "html",
+        "html": "<p>Hi {{$json.name}},</p><p>Congratulations! Your application for the <strong>{{$json.role_applied}}</strong> role has passed our initial screening. Our team will reach out shortly to schedule the next step in the process.</p><p>— The DevSynt Hiring Team</p>"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "DevSynt SMTP"
+        }
+      }
+    },
+    {
+      "id": "notify_manager_email",
+      "name": "Notify Hiring Manager",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [740, 300],
+      "parameters": {
+        "fromEmail": "careers@devsynt.com",
+        "toEmail": "hiring.manager@devsynt.com",
+        "subject": "Manual review needed: {{$json.name}} - {{$json.role_applied}}",
+        "emailFormat": "html",
+        "html": "<p>A candidate needs manual review:</p><ul><li><strong>Name:</strong> {{$json.name}}</li><li><strong>Email:</strong> {{$json.email}}</li><li><strong>Role:</strong> {{$json.role_applied}}</li><li><strong>ATS Score:</strong> {{$json.ats_score}}</li><li><strong>Source:</strong> {{$json.source}}</li></ul><p>Resume/notes: {{$json.resume_text}}</p><p>Please review in Supabase and add manager_notes.</p>"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "DevSynt SMTP"
+        }
+      },
+      "notes": "Replace hiring.manager@devsynt.com with the real hiring manager address"
+    },
+    {
+      "id": "send_weak_email",
+      "name": "Send Rejection Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [740, 500],
+      "parameters": {
+        "fromEmail": "careers@devsynt.com",
+        "toEmail": "={{$json.email}}",
+        "subject": "Update on your DevSynt application",
+        "emailFormat": "html",
+        "html": "<p>Hi {{$json.name}},</p><p>Thank you for taking the time to apply for the <strong>{{$json.role_applied}}</strong> role at DevSynt. After careful review, we've decided not to move forward with your application at this time.</p><p>We appreciate your interest in DevSynt and encourage you to apply again in the future.</p><p>— The DevSynt Hiring Team</p>"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "DevSynt SMTP"
+        }
+      }
+    },
+    {
+      "id": "update_status_strong",
+      "name": "Update Status - Notified (Strong)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [960, 100],
+      "parameters": {
+        "operation": "update",
+        "tableId": "candidates",
+        "filterType": "manual",
+        "matchingColumns": ["email"],
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "status", "fieldValue": "notified" }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "id": "update_status_average",
+      "name": "Update Status - Manual Review",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [960, 300],
+      "parameters": {
+        "operation": "update",
+        "tableId": "candidates",
+        "filterType": "manual",
+        "matchingColumns": ["email"],
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "status", "fieldValue": "manual_review" }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase account"
+        }
+      }
+    },
+    {
+      "id": "update_status_weak",
+      "name": "Update Status - Notified (Weak)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [960, 500],
+      "parameters": {
+        "operation": "update",
+        "tableId": "candidates",
+        "filterType": "manual",
+        "matchingColumns": ["email"],
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "status", "fieldValue": "notified" }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase account"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Every 15 Minutes": {
+      "main": [[{ "node": "Get Pending Candidates (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Get Pending Candidates (Supabase)": {
+      "main": [[{ "node": "Has Classification?", "type": "main", "index": 0 }]]
+    },
+    "Has Classification?": {
+      "main": [[{ "node": "Route by Classification", "type": "main", "index": 0 }]]
+    },
+    "Route by Classification": {
+      "main": [
+        [{ "node": "Send Shortlist Email", "type": "main", "index": 0 }],
+        [{ "node": "Notify Hiring Manager", "type": "main", "index": 0 }],
+        [{ "node": "Send Rejection Email", "type": "main", "index": 0 }]
+      ]
+    },
+    "Send Shortlist Email": {
+      "main": [[{ "node": "Update Status - Notified (Strong)", "type": "main", "index": 0 }]]
+    },
+    "Notify Hiring Manager": {
+      "main": [[{ "node": "Update Status - Manual Review", "type": "main", "index": 0 }]]
+    },
+    "Send Rejection Email": {
+      "main": [[{ "node": "Update Status - Notified (Weak)", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}

@@ -1,0 +1,290 @@
+{
+  "name": "DevSynt Hiring - 1. Application Intake, Screening & Acknowledgment",
+  "nodes": [
+    {
+      "id": "sticky_overview",
+      "name": "Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-200, -60],
+      "parameters": {
+        "width": 620,
+        "height": 260,
+        "content": "## Workflow 1 — Intake, Screening & Acknowledgment\n\n**Flow:**\n1. Fetch new applications from IMAP (email) and Google Sheets (form)\n2. Normalize both into one common shape\n3. Insert into Supabase `candidates` table\n4. Send acknowledgment email to candidate\n5. Call an AI model to score the resume vs job requirements\n6. Parse score -> classify Strong/Average/Weak (bands: 75-100 / 50-74 / <50)\n7. Update the Supabase record with ats_score + classification\n\n**Before running:**\n- Attach your IMAP, Google Sheets, Supabase, SMTP/Email, and OpenAI credentials on the respective nodes (currently blank placeholders).\n- In Supabase, add a UNIQUE constraint on (email, role_applied) and consider using 'upsert' on the Insert node to avoid duplicate applications automatically.\n- Set JOB_REQUIREMENTS text inside the 'AI Resume Scoring' node body to match the role you're screening for."
+      }
+    },
+    {
+      "id": "imap_trigger",
+      "name": "Email Applications (IMAP)",
+      "type": "n8n-nodes-base.emailReadImap",
+      "typeVersion": 2,
+      "position": [-200, 260],
+      "parameters": {
+        "mailbox": "INBOX",
+        "postProcessAction": "read",
+        "options": {
+          "forceReconnect": 60
+        }
+      },
+      "credentials": {
+        "imap": {
+          "id": "",
+          "name": "careers@devsynt.com (IMAP)"
+        }
+      },
+      "notes": "Fetches new candidate application emails sent to careers@devsynt.com"
+    },
+    {
+      "id": "sheets_trigger",
+      "name": "Google Form Submissions (Sheets)",
+      "type": "n8n-nodes-base.googleSheetsTrigger",
+      "typeVersion": 1,
+      "position": [-200, 480],
+      "parameters": {
+        "pollTimes": {
+          "item": [
+            { "mode": "everyMinute" }
+          ]
+        },
+        "event": "rowAdded",
+        "documentId": {
+          "mode": "list",
+          "value": "PUT_GOOGLE_SHEET_ID_HERE"
+        },
+        "sheetName": {
+          "mode": "list",
+          "value": "Form Responses 1"
+        },
+        "options": {}
+      },
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "",
+          "name": "Google Sheets account"
+        }
+      },
+      "notes": "Fetches new rows from the Google Form responses sheet"
+    },
+    {
+      "id": "normalize_email",
+      "name": "Normalize Email Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 260],
+      "parameters": {
+        "jsCode": "// Normalize an incoming email application into the common candidate shape\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n\n  // Basic parsing - adjust regex/logic to match your actual email format\n  const fromText = j.from || j.From || '';\n  const emailMatch = fromText.match(/[\\w.+-]+@[\\w-]+\\.[\\w.-]+/);\n  const email = emailMatch ? emailMatch[0] : '';\n  const nameMatch = fromText.match(/^\\\"?([^\\\"<]+)\\\"?\\s*</);\n  const name = nameMatch ? nameMatch[1].trim() : (email ? email.split('@')[0] : 'Unknown');\n\n  const subject = j.subject || j.Subject || '';\n  const roleMatch = subject.match(/applying for[:\\-]?\\s*(.+)/i);\n  const roleApplied = roleMatch ? roleMatch[1].trim() : (subject || 'Not specified');\n\n  out.push({\n    json: {\n      name,\n      email,\n      phone: '',\n      source: 'email',\n      role_applied: roleApplied,\n      resume_text: j.text || j.textHtml || '',\n      resume_url: '',\n      applied_at: new Date().toISOString()\n    }\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "normalize_form",
+      "name": "Normalize Form Data",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 480],
+      "parameters": {
+        "jsCode": "// Normalize a Google Form row into the common candidate shape\n// Adjust the column names below to exactly match your Google Form's sheet headers\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n\n  out.push({\n    json: {\n      name: j['Full Name'] || j['Name'] || '',\n      email: j['Email'] || j['Email Address'] || '',\n      phone: j['Phone'] || j['Phone Number'] || '',\n      source: 'form',\n      role_applied: j['Role Applied For'] || j['Position'] || 'Not specified',\n      resume_text: j['Resume Text'] || '',\n      resume_url: j['Resume Link'] || j['Resume URL'] || '',\n      applied_at: j['Timestamp'] ? new Date(j['Timestamp']).toISOString() : new Date().toISOString()\n    }\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "merge_apps",
+      "name": "Merge Applications",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [340, 370],
+      "parameters": {
+        "mode": "append"
+      }
+    },
+    {
+      "id": "validate_fields",
+      "name": "Validate Required Fields",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2,
+      "position": [560, 370],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "leftValue": "={{$json.email}}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            },
+            {
+              "leftValue": "={{$json.name}}",
+              "rightValue": "",
+              "operator": { "type": "string", "operation": "notEmpty" }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "notes": "Error handling: drop/flag records missing a name or email instead of failing the whole run"
+    },
+    {
+      "id": "insert_candidate",
+      "name": "Insert Candidate (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [780, 370],
+      "parameters": {
+        "operation": "create",
+        "tableId": "candidates",
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "name", "fieldValue": "={{$json.name}}" },
+            { "fieldId": "email", "fieldValue": "={{$json.email}}" },
+            { "fieldId": "phone", "fieldValue": "={{$json.phone}}" },
+            { "fieldId": "source", "fieldValue": "={{$json.source}}" },
+            { "fieldId": "role_applied", "fieldValue": "={{$json.role_applied}}" },
+            { "fieldId": "resume_text", "fieldValue": "={{$json.resume_text}}" },
+            { "fieldId": "applied_at", "fieldValue": "={{$json.applied_at}}" },
+            { "fieldId": "status", "fieldValue": "pending_review" }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase account"
+        }
+      },
+      "notes": "Add a UNIQUE constraint on (email, role_applied) in Supabase, and switch this to an 'upsert' operation if you want automatic duplicate protection."
+    },
+    {
+      "id": "send_ack_email",
+      "name": "Send Acknowledgment Email",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2,
+      "position": [1000, 370],
+      "parameters": {
+        "fromEmail": "careers@devsynt.com",
+        "toEmail": "={{$json.email}}",
+        "subject": "Thanks for applying to DevSynt!",
+        "emailFormat": "html",
+        "html": "<p>Hi {{$json.name}},</p><p>Thanks for applying to DevSynt for the <strong>{{$json.role_applied}}</strong> role. We've received your application and our team will review it shortly.</p><p>We'll be in touch soon with next steps.</p><p>— The DevSynt Hiring Team</p>"
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "credentials": {
+        "smtp": {
+          "id": "",
+          "name": "DevSynt SMTP"
+        }
+      }
+    },
+    {
+      "id": "ai_score_resume",
+      "name": "AI Resume Scoring (OpenAI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1220, 370],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ model: \"gpt-4o-mini\", response_format: { type: \"json_object\" }, messages: [ { role: \"system\", content: \"You are an ATS resume screener. Score the candidate's resume against the job requirements on a 0-100 scale. Respond ONLY with strict JSON: {\\\"ats_score\\\": number, \\\"reasoning\\\": string}. JOB REQUIREMENTS: \" + $json.role_applied + \" - Adjust this text to your actual job requirements.\" }, { role: \"user\", content: \"Candidate resume:\\n\" + $json.resume_text } ] }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 2,
+      "continueOnFail": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "",
+          "name": "OpenAI API Key"
+        }
+      },
+      "notes": "Header auth credential should set 'Authorization: Bearer YOUR_OPENAI_KEY'. continueOnFail is on so a failed AI call doesn't stop the pipeline (handled in next node)."
+    },
+    {
+      "id": "parse_classify",
+      "name": "Parse AI Score & Classify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1440, 370],
+      "parameters": {
+        "jsCode": "// Parse the AI response, apply scoring bands, and attach classification\nconst out = [];\nfor (const item of $input.all()) {\n  const j = item.json;\n  let atsScore = 0;\n  let reasoning = '';\n\n  try {\n    const content = j.choices?.[0]?.message?.content;\n    const parsed = JSON.parse(content);\n    atsScore = Number(parsed.ats_score) || 0;\n    reasoning = parsed.reasoning || '';\n  } catch (e) {\n    // AI call failed or returned bad JSON -> fail-safe to manual review, don't silently drop the candidate\n    atsScore = 0;\n    reasoning = 'AI scoring failed - flagged for manual review';\n  }\n\n  let classification;\n  if (atsScore >= 75) classification = 'Strong';\n  else if (atsScore >= 50) classification = 'Average';\n  else classification = 'Weak';\n\n  out.push({\n    json: {\n      ...item.json,\n      ats_score: atsScore,\n      classification,\n      ai_reasoning: reasoning\n    }\n  });\n}\nreturn out;"
+      }
+    },
+    {
+      "id": "update_score",
+      "name": "Update Candidate Score (Supabase)",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [1660, 370],
+      "parameters": {
+        "operation": "update",
+        "tableId": "candidates",
+        "filterType": "manual",
+        "matchingColumns": ["email"],
+        "dataToSend": "defineBelow",
+        "fieldsUi": {
+          "fieldValues": [
+            { "fieldId": "ats_score", "fieldValue": "={{$json.ats_score}}" },
+            { "fieldId": "classification", "fieldValue": "={{$json.classification}}" }
+          ]
+        }
+      },
+      "retryOnFail": true,
+      "maxTries": 3,
+      "credentials": {
+        "supabaseApi": {
+          "id": "",
+          "name": "Supabase account"
+        }
+      },
+      "notes": "status stays 'pending_review' here - Workflow 2 picks these up and moves status to notified/manual_review"
+    }
+  ],
+  "connections": {
+    "Email Applications (IMAP)": {
+      "main": [[{ "node": "Normalize Email Data", "type": "main", "index": 0 }]]
+    },
+    "Google Form Submissions (Sheets)": {
+      "main": [[{ "node": "Normalize Form Data", "type": "main", "index": 0 }]]
+    },
+    "Normalize Email Data": {
+      "main": [[{ "node": "Merge Applications", "type": "main", "index": 0 }]]
+    },
+    "Normalize Form Data": {
+      "main": [[{ "node": "Merge Applications", "type": "main", "index": 1 }]]
+    },
+    "Merge Applications": {
+      "main": [[{ "node": "Validate Required Fields", "type": "main", "index": 0 }]]
+    },
+    "Validate Required Fields": {
+      "main": [[{ "node": "Insert Candidate (Supabase)", "type": "main", "index": 0 }]]
+    },
+    "Insert Candidate (Supabase)": {
+      "main": [[{ "node": "Send Acknowledgment Email", "type": "main", "index": 0 }]]
+    },
+    "Send Acknowledgment Email": {
+      "main": [[{ "node": "AI Resume Scoring (OpenAI)", "type": "main", "index": 0 }]]
+    },
+    "AI Resume Scoring (OpenAI)": {
+      "main": [[{ "node": "Parse AI Score & Classify", "type": "main", "index": 0 }]]
+    },
+    "Parse AI Score & Classify": {
+      "main": [[{ "node": "Update Candidate Score (Supabase)", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {}
+}
