@@ -175,10 +175,10 @@ These thresholds are configurable in the "Parse AI Score & Classify" code node a
 > Screenshots below are illustrative placeholders — replace with your own exported images in the `/screenshots` folder.
 
 **Workflow 1 — full canvas, successful execution:**
-![Workflow 1 execution](./screenshots/workflow1-execution.png)
+![Workflow 1 execution](./screenshots/workflow1-execution_hiring_application_intake.png)
 
 **Workflow 2 — full canvas, successful execution:**
-![Workflow 2 execution](./screenshots/workflow2-execution.png)
+![Workflow 2 execution](./screenshots/workflow2-execution_hiring_review_routing.png)
 
 **Supabase `candidates` table with live data:**
 ![Supabase table](./screenshots/supabase-table.png)
